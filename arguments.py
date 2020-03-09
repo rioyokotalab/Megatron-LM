@@ -360,21 +360,13 @@ def get_args():
 
     args.cuda = torch.cuda.is_available()
 
-    args.rank = int(os.getenv('RANK', '0'))
-    args.world_size = int(os.getenv("WORLD_SIZE", '1'))
+    args.rank = int(os.getenv('OMPI_COMM_WORLD_RANK', '0'))
+    args.world_size = int(os.getenv("OMPI_COMM_WORLD_SIZE", '1'))
 
     if os.getenv('OMPI_COMM_WORLD_LOCAL_RANK'):
         # We are using (OpenMPI) mpirun for launching distributed data parallel processes
         local_rank = int(os.getenv('OMPI_COMM_WORLD_LOCAL_RANK'))
-        local_size = int(os.getenv('OMPI_COMM_WORLD_LOCAL_SIZE'))
-
-        # Possibly running with Slurm
-        num_nodes = int(os.getenv('SLURM_JOB_NUM_NODES', '1'))
-        nodeid = int(os.getenv('SLURM_NODEID', '0'))
-
         args.local_rank = local_rank
-        args.rank = nodeid*local_size + local_rank
-        args.world_size = num_nodes*local_size
 
     args.model_parallel_size = min(args.model_parallel_size, args.world_size)
     if args.rank == 0:

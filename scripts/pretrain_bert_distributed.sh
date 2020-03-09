@@ -3,14 +3,11 @@
 GPUS_PER_NODE=4
 MASTER_ADDR=`head -n 1 $SGE_JOB_HOSTLIST`
 MASTER_PORT=8888
-NNODES=$NHOSTS
-NODE_RANK=0
-WORLD_SIZE=$(($GPUS_PER_NODE*$NNODES))
 
-DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE --nnodes $NNODES --node_rank $NODE_RANK --master_addr $MASTER_ADDR --master_port $MASTER_PORT"
-
-python -m torch.distributed.launch $DISTRIBUTED_ARGS \
-       pretrain_bert.py \
+mpiexec -N $GPUS_PER_NODE \
+    -x MASTER_ADDR=$MASTER_ADDR \
+    -x MASTER_PORT=$MASTER_PORT \
+    python pretrain_bert.py \
        --num-layers 24 \
        --hidden-size 1024 \
        --num-attention-heads 16 \
