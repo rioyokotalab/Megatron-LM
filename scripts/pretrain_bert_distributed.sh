@@ -1,10 +1,9 @@
 #!/bin/bash
 
-GPUS_PER_NODE=8
-# Change for multinode config
-MASTER_ADDR=localhost
-MASTER_PORT=6000
-NNODES=1
+GPUS_PER_NODE=4
+MASTER_ADDR=`head -n 1 $SGE_JOB_HOSTLIST`
+MASTER_PORT=8888
+NNODES=$NHOSTS
 NODE_RANK=0
 WORLD_SIZE=$(($GPUS_PER_NODE*$NNODES))
 
@@ -40,4 +39,3 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --fp16 \
        --fp32-layernorm \
        --fp32-embedding
-
