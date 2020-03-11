@@ -21,6 +21,7 @@ mpiexec -N $GPUS_PER_NODE \
        --resume-dataloader \
        --train-data wikipedia \
        --lazy-loader \
+       --shuffle \
        --tokenizer-type BertWordPieceTokenizer \
        --tokenizer-model-type bert-large-uncased \
        --presplit-sentences \
