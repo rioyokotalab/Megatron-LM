@@ -8,11 +8,11 @@ mpiexec -N $GPUS_PER_NODE \
     -x MASTER_ADDR=$MASTER_ADDR \
     -x MASTER_PORT=$MASTER_PORT \
     python pretrain_bert.py \
-       --num-layers 24 \
-       --hidden-size 1024 \
-       --num-attention-heads 16 \
-       --batch-size 4 \
-       --seq-length 512
+       --num-layers 12 \
+       --hidden-size 768 \
+       --num-attention-heads 12 \
+       --batch-size 16 \
+       --seq-length 512 \
        --max-preds-per-seq 80 \
        --max-position-embeddings 512 \
        --train-iters 1000000 \
@@ -21,6 +21,7 @@ mpiexec -N $GPUS_PER_NODE \
        --resume-dataloader \
        --train-data wikipedia \
        --lazy-loader \
+       --shuffle \
        --tokenizer-type BertWordPieceTokenizer \
        --tokenizer-model-type bert-large-uncased \
        --presplit-sentences \
