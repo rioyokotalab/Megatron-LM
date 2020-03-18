@@ -12,7 +12,7 @@ mpiexec -N $GPUS_PER_NODE \
        --hidden-size 1024 \
        --num-attention-heads 16 \
        --batch-size 4 \
-       --seq-length 512
+       --seq-length 512 \
        --max-preds-per-seq 80 \
        --max-position-embeddings 512 \
        --train-iters 1000000 \
