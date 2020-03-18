@@ -1,9 +1,12 @@
-0310 large no shuffle bs=4 np=8 109700 2.3 > 7.3
-0311 large shuffle bs=4 np=8 68700 2.4 > 7.3
-0312 base shuffle bs=4 np=8 1000000 1.53
-0313 base shuffle bs=8 np=8 1000000 1.43
-0314 base shuffle bs=16 np=8
-0315 base shuffle bs=16 np=16
-0316 large shuffle bs=4 np=16 73000 2.1 > 7.3
-0317 large no shuffle bs=4 np=16 34600 2.4 > 7.3
-0318 large shuffle no fp16 bs=2 np=16
+|  ID  | model | shuffle | fp16  | bs | np | convergence 
+| ---- | ----- | ------- | ----- | -- | -- | -----------
+| 0310 | large |    x    |   o   |  4 |  8 | 109700 2.3 > 7.3    
+| 0311 | large |    o    |   o   |  4 |  8 | 68700 2.4 > 7.3
+| 0312 | base  |    o    |   o   |  4 |  8 | 1000000 1.53
+| 0313 | base  |    o    |   o   |  8 |  8 | 1000000 1.43
+| 0314 | base  |    o    |   o   | 16 |  8 |
+| 0315 | base  |    o    |   o   | 16 | 16 |
+| 0316 | large |    o    |   o   |  4 | 16 | 73000 2.1 > 7.3
+| 0317 | large |    x    |   o   |  4 | 16 | 34600 2.4 > 7.3
+| 0318 | large |    x    |   x   |  2 | 16 |
+| 0319 | large |    o    |   x   |  2 | 16 |

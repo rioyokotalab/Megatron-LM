@@ -11,7 +11,7 @@ mpiexec -N $GPUS_PER_NODE \
        --num-layers 24 \
        --hidden-size 1024 \
        --num-attention-heads 16 \
-       --batch-size 4 \
+       --batch-size 2 \
        --seq-length 512 \
        --max-preds-per-seq 80 \
        --max-position-embeddings 512 \
@@ -21,6 +21,7 @@ mpiexec -N $GPUS_PER_NODE \
        --resume-dataloader \
        --train-data wikipedia \
        --lazy-loader \
+       --shuffle \
        --tokenizer-type BertWordPieceTokenizer \
        --tokenizer-model-type bert-large-uncased \
        --presplit-sentences \
@@ -33,6 +34,5 @@ mpiexec -N $GPUS_PER_NODE \
        --weight-decay 1e-2 \
        --clip-grad 1.0 \
        --warmup .01 \
-       --fp16 \
        --fp32-layernorm \
        --fp32-embedding
