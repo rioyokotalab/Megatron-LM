@@ -11,7 +11,7 @@ mpiexec -N $GPUS_PER_NODE \
        --num-layers 24 \
        --hidden-size 1024 \
        --num-attention-heads 16 \
-       --batch-size 2 \
+       --batch-size 4 \
        --seq-length 512 \
        --max-preds-per-seq 80 \
        --max-position-embeddings 512 \
@@ -31,8 +31,9 @@ mpiexec -N $GPUS_PER_NODE \
        --lr 0.0001 \
        --lr-decay-style linear \
        --lr-decay-iters 990000 \
-       --weight-decay 1e-2 \
+       --weight-decay 1e-1 \
        --clip-grad 1.0 \
        --warmup .01 \
+       --fp16 \
        --fp32-layernorm \
        --fp32-embedding
