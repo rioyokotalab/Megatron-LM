@@ -15,7 +15,7 @@ mpiexec -N $GPUS_PER_NODE \
        --seq-length 128 \
        --max-preds-per-seq 80 \
        --max-position-embeddings 512 \
-       --train-iters 500000 \
+       --train-iters 1000000 \
        --save checkpoints/$JOB_NAME \
        --load checkpoints/$JOB_NAME \
        --resume-dataloader \
@@ -28,10 +28,10 @@ mpiexec -N $GPUS_PER_NODE \
        --cache-dir cache \
        --split 949,50,1 \
        --distributed-backend nccl \
-       --lr 0.0001 \
+       --lr 0.00005 \
        --lr-decay-style linear \
-       --lr-decay-iters 490000 \
-       --weight-decay 1e-1 \
+       --lr-decay-iters 990000 \
+       --weight-decay 2e-1 \
        --clip-grad 1.0 \
        --warmup .01 \
        --fp16 \

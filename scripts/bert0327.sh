@@ -31,7 +31,7 @@ mpiexec -N $GPUS_PER_NODE \
        --lr 0.0001 \
        --lr-decay-style linear \
        --lr-decay-iters 490000 \
-       --weight-decay 1e-1 \
+       --weight-decay 1e-2 \
        --clip-grad 1.0 \
        --warmup .01 \
        --fp16 \
