@@ -1,156 +1,193 @@
-# coding=utf-8
-# Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
 
 """Pretrain BERT"""
+
+from functools import partial
 
 import torch
 import torch.nn.functional as F
 
-from configure_data import configure_data
-from megatron import mpu
-from megatron.model import BertModel
-from megatron.utils import print_rank_0
-from megatron.utils import reduce_losses
-from megatron.utils import vocab_size_with_padding
-from megatron.training import run
+from megatron.training import get_args
+from megatron.training import get_tokenizer
+from megatron.training import print_rank_0
+from megatron.training import get_timers
+from megatron.core import tensor_parallel
+from megatron.core.enums import ModelType
+import megatron.legacy.model
+from megatron.core.models.bert.bert_model import BertModel
+from megatron.training import pretrain
+from megatron.training.utils import average_losses_across_data_parallel_group
+from megatron.training.arguments import core_transformer_config_from_args
+from megatron.core.transformer.spec_utils import import_module
+from megatron.core.models.bert.bert_layer_specs import bert_layer_with_transformer_engine_spec, bert_layer_local_spec
+from megatron.core.datasets.blended_megatron_dataset_builder import BlendedMegatronDatasetBuilder
+from megatron.core.datasets.bert_dataset import BERTMaskedWordPieceDataset, BERTMaskedWordPieceDatasetConfig
+from megatron.core.datasets.utils import get_blend_from_list
+from megatron.core import mpu, tensor_parallel
 
 
-def model_provider(args):
+def model_provider(pre_process=True, post_process=True):
     """Build the model."""
 
     print_rank_0('building BERT model ...')
 
-    model = BertModel(
-        num_layers=args.num_layers,
-        vocab_size=args.vocab_size,
-        hidden_size=args.hidden_size,
-        num_attention_heads=args.num_attention_heads,
-        embedding_dropout_prob=args.hidden_dropout,
-        attention_dropout_prob=args.attention_dropout,
-        output_dropout_prob=args.hidden_dropout,
-        max_sequence_length=args.max_position_embeddings,
-        checkpoint_activations=args.checkpoint_activations,
-        checkpoint_num_layers=args.checkpoint_num_layers,
-        add_binary_head=True,
-        layernorm_epsilon=args.layernorm_epsilon,
-        num_tokentypes=args.tokentype_size,
-        parallel_output=True,
-        apply_query_key_layer_scaling=args.apply_query_key_layer_scaling,
-        attention_softmax_in_fp32=args.attention_softmax_in_fp32)
+    args = get_args()
+    config = core_transformer_config_from_args(args)
+    num_tokentypes = 2 if args.bert_binary_head else 0
+
+    if args.use_legacy_models:
+        model = megatron.legacy.model.BertModel(
+            config=config,
+            num_tokentypes=num_tokentypes,
+            add_binary_head=args.bert_binary_head,
+            parallel_output=True,
+            pre_process=pre_process,
+            post_process=post_process)
+    else:
+        if args.spec is None:
+            transformer_layer_spec = bert_layer_with_transformer_engine_spec #default spec
+        elif args.spec[0] == 'local':
+            print_rank_0('Using Local spec for transformer layers')
+            transformer_layer_spec = bert_layer_local_spec
+        else :
+            transformer_layer_spec = import_module(args.spec)
+
+        model = BertModel(
+            config=config,
+            transformer_layer_spec=transformer_layer_spec,
+            vocab_size=args.padded_vocab_size,
+            max_sequence_length=args.max_position_embeddings,
+            num_tokentypes=num_tokentypes,
+            add_binary_head=args.bert_binary_head,
+            share_embeddings_and_output_weights=not args.untie_embeddings_and_output_weights,
+            parallel_output=True,
+            pre_process=pre_process,
+            post_process=post_process)
 
     return model
 
 
-def get_batch(data_iterator, timers):
+def get_batch(data_iterator):
+    """Build the batch."""
 
     # Items and their type.
-    keys = ['text', 'types', 'is_random', 'mask', 'mask_labels', 'pad_mask']
+    keys = ['text', 'types', 'labels',
+            'is_random', 'loss_mask', 'padding_mask']
     datatype = torch.int64
 
     # Broadcast data.
-    timers('data loader').start()
     if data_iterator is not None:
         data = next(data_iterator)
     else:
         data = None
-    timers('data loader').stop()
-    data_b = mpu.broadcast_data(keys, data, datatype)
+    data_b = tensor_parallel.broadcast_data(keys, data, datatype)
 
     # Unpack.
     tokens = data_b['text'].long()
     types = data_b['types'].long()
-    next_sentence = data_b['is_random'].long()
-    loss_mask = data_b['mask'].float()
-    lm_labels = data_b['mask_labels'].long()
-    padding_mask = data_b['pad_mask'].long()
+    sentence_order = data_b['is_random'].long()
+    loss_mask = data_b['loss_mask'].float()
+    lm_labels = data_b['labels'].long()
+    padding_mask = data_b['padding_mask'].long()
 
-    return tokens, types, next_sentence, loss_mask, lm_labels, padding_mask
+    return tokens, types, sentence_order, loss_mask, lm_labels, padding_mask
 
 
-def forward_step(data_iterator, model, args, timers):
-    """Forward step."""
+def loss_func(loss_mask, sentence_order, output_tensor):
+    lm_loss_, sop_logits = output_tensor
 
-    # Get the batch.
-    timers('batch generator').start()
-    tokens, types, next_sentence, loss_mask, lm_labels, padding_mask \
-        = get_batch(data_iterator, timers)
-    timers('batch generator').stop()
-
-    # Forward model.
-    lm_logits, nsp_logits = model(tokens, 1-padding_mask, tokentype_ids=types)
-
-    nsp_loss = F.cross_entropy(nsp_logits.view(-1, 2).contiguous().float(),
-                               next_sentence.view(-1).contiguous(),
-                               ignore_index=-1)
-
-    lm_loss_ = mpu.vocab_parallel_cross_entropy(lm_logits.contiguous().float(),
-                                                lm_labels.contiguous())
+    lm_loss_ = lm_loss_.float()
+    loss_mask = loss_mask.float()
     lm_loss = torch.sum(
         lm_loss_.view(-1) * loss_mask.reshape(-1)) / loss_mask.sum()
 
-    loss = lm_loss + nsp_loss
-
-    reduced_losses = reduce_losses([lm_loss, nsp_loss])
-
-    return loss, {'lm loss': reduced_losses[0], 'nsp loss': reduced_losses[1]}
-
-
-def get_train_val_test_data(args):
-    """Load the data on rank zero and boradcast number of tokens to all GPUS."""
-
-    (train_data, val_data, test_data) = (None, None, None)
-
-    # Data loader only on rank 0 of each model parallel group.
-    if mpu.get_model_parallel_rank() == 0:
-        if (args.data_loader == 'raw'
-            or args.data_loader == 'lazy'
-            or args.data_loader == 'tfrecords'):
-            data_config = configure_data()
-            ds_type = 'BERT'
-            data_config.set_defaults(data_set_type=ds_type, transpose=False)
-            (train_data, val_data, test_data), tokenizer = data_config.apply(args)
-            num_tokens = vocab_size_with_padding(tokenizer.num_tokens, args)
-            # Need to broadcast num_tokens and num_type_tokens.
-            token_counts = torch.cuda.LongTensor([num_tokens,
-                                                  tokenizer.num_type_tokens,
-                                                  int(args.do_train),
-                                                  int(args.do_valid),
-                                                  int(args.do_test)])
-        else:
-            print("Unsupported data loader for BERT.")
-            exit(1)
+    if sop_logits is not None:
+        sop_loss = F.cross_entropy(sop_logits.view(-1, 2).float(),
+                                   sentence_order.view(-1),
+                                   ignore_index=-1)
+        sop_loss = sop_loss.float()
+        loss = lm_loss + sop_loss
+        averaged_losses = average_losses_across_data_parallel_group(
+            [lm_loss, sop_loss])
+        return loss, {'lm loss': averaged_losses[0],
+                      'sop loss': averaged_losses[1]}
     else:
-        token_counts = torch.cuda.LongTensor([0, 0, 0, 0, 0])
+        loss = lm_loss
+        averaged_losses = average_losses_across_data_parallel_group(
+            [lm_loss])
+        return loss, {'lm loss': averaged_losses[0]}
 
-    # Broadcast num tokens.
-    torch.distributed.broadcast(token_counts,
-                                mpu.get_model_parallel_src_rank(),
-                                group=mpu.get_model_parallel_group())
-    num_tokens = token_counts[0].item()
-    num_type_tokens = token_counts[1].item()
-    args.do_train = token_counts[2].item()
-    args.do_valid = token_counts[3].item()
-    args.do_test = token_counts[4].item()
 
-    args.vocab_size = num_tokens
-    args.tokentype_size = num_type_tokens
+def forward_step(data_iterator, model):
+    """Forward step."""
+    args = get_args()
+    timers = get_timers()
 
-    return train_data, val_data, test_data
+    # Get the batch.
+    timers('batch-generator', log_level=2).start()
+    tokens, types, sentence_order, loss_mask, lm_labels, padding_mask = get_batch(
+        data_iterator)
+    timers('batch-generator').stop()
+
+    if not args.bert_binary_head:
+        types = None
+
+    # Forward pass through the model.
+    output_tensor = model(tokens, padding_mask,
+                          tokentype_ids=types, lm_labels=lm_labels)
+
+    return output_tensor, partial(loss_func, loss_mask, sentence_order)
+
+
+def train_valid_test_datasets_provider(train_val_test_num_samples):
+    """Build train, valid, and test datasets."""
+    args = get_args()
+
+    tokenizer = get_tokenizer()
+
+    config = BERTMaskedWordPieceDatasetConfig(
+        random_seed=args.seed,
+        sequence_length=args.seq_length,
+        blend=get_blend_from_list(args.data_path),
+        blend_per_split=[
+            get_blend_from_list(args.train_data_path),
+            get_blend_from_list(args.valid_data_path),
+            get_blend_from_list(args.test_data_path)
+        ],
+        renormalize_blend_weights=args.renormalize_blend_weights,
+        split=args.split,
+        path_to_cache=args.data_cache_path,
+        tokenizer=tokenizer,
+        masking_probability=args.mask_prob,
+        short_sequence_probability=args.short_seq_prob,
+        masking_max_ngram=3,
+        masking_do_full_word=True,
+        masking_do_permutation=False,
+        masking_use_longer_ngrams=False,
+        masking_use_geometric_distribution=False,
+        classification_head=args.bert_binary_head,
+    )
+
+    print_rank_0('> building train, validation, and test datasets '
+                 'for BERT ...')
+
+    train_ds, valid_ds, test_ds = BlendedMegatronDatasetBuilder(
+        BERTMaskedWordPieceDataset,
+        train_val_test_num_samples,
+        lambda: mpu.get_tensor_model_parallel_rank() == 0,
+        config,
+    ).build()
+
+    print_rank_0("> finished creating BERT datasets ...")
+
+    return train_ds, valid_ds, test_ds
 
 
 if __name__ == "__main__":
 
-    run('Pretrain BERT model', get_train_val_test_data,
-        model_provider, forward_step)
+    # Temporary for transition to core datasets
+    train_valid_test_datasets_provider.is_distributed = True
+
+    pretrain(train_valid_test_datasets_provider, model_provider,
+             ModelType.encoder_or_decoder,
+             forward_step, args_defaults={'tokenizer_type': 'BertWordPieceLowerCase'})

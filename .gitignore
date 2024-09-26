@@ -1,1 +1,11 @@
 __pycache__
+*.so
+build
+.coverage_*
+*.egg-info
+*~
+slurm*
+logs
+.vscode
+local/
+.gitmodules
